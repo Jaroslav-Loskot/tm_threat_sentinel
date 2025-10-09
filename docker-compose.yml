@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  threatmark-ai-bot:
+    container_name: threatmark-ai-bot
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INCLUDE_DEV: "false"   # no dev deps in prod
+    environment:
+      # Load AWS + Slack secrets from .env
+      - PYTHONUNBUFFERED=1
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - CLAUDE_MODEL_ID=${CLAUDE_MODEL_ID}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_CHANNEL_NAME=${SLACK_CHANNEL_NAME}
+      - ALERT_EMAILS=${ALERT_EMAILS}
+      - ALERT_THRESHOLD=${ALERT_THRESHOLD:-4}
+    volumes:
+      - ./data:/app/src/data
+    restart: unless-stopped
+    command: ["uv", "run", "-m", "src.main_channel"]

@@ -1,0 +1,95 @@
+# ==========================================================
+# 🧠 ThreatMark AI Bot — Git Ignore
+# ==========================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+.Python
+.env
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+build/
+dist/
+.eggs/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.code-workspace
+
+# --- OS Junk ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# --- Logs / Reports ---
+*.log
+*.out
+*.err
+logs/
+debug.log
+
+# --- Local Data ---
+data/
+!src/utils/path_utils.py      # keep the helper itself
+!src/__init__.py
+!src/utils/__init__.py
+
+# --- Caches ---
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.cache/
+.tqdm_cache/
+.ipynb_checkpoints/
+
+# --- Test artifacts ---
+*.coverage
+coverage.xml
+htmlcov/
+
+# --- Docker / Compose ---
+*.pid
+docker-compose.override.yml
+.docker/
+tmp/
+.tmp/
+
+# --- Node / Frontend (if any future UI components) ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# --- Local tooling ---
+.env.local
+.env.dev
+.envrc
+*.bak
+*.old
+*.tmp
+
+# --- Machine learning / scraping artifacts ---
+notebooks/
+outputs/
+playwright-report/
+playwright/.cache/
+
+# --- AWS / Credentials ---
+.aws/
+*.pem
+*.key
+*_creds.json
+
+
+# --- Custom
+
+source_code.txt

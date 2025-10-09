@@ -1,0 +1,59 @@
+# ==========================================================
+# 🧠 ThreatMark AI Bot — Docker Ignore
+# ==========================================================
+
+# --- Git ---
+.git
+.gitignore
+.gitmodules
+.github/
+
+# --- Local envs ---
+.env
+.env.*
+*.pem
+*.key
+*_creds.json
+*.aws/
+
+# --- Dev / CI artifacts ---
+.vscode/
+.idea/
+tests/
+notebooks/
+docs/
+examples/
+*.code-workspace
+*.md
+
+# --- Python build & caches ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.cache/
+
+# --- Node / Frontend (if any future web dashboard) ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# --- Local data ---
+data/
+outputs/
+logs/
+tmp/
+playwright-report/
+playwright/.cache/
+
+# --- Docker ---
+docker-compose.override.yml
+Dockerfile.dev
+.docker/
