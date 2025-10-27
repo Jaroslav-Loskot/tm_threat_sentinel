@@ -2,43 +2,7 @@ import asyncio
 from typing import List, Dict
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-from crawl4ai import AsyncWebCrawler
-from crawl4ai.async_configs import BrowserConfig, CrawlerRunConfig
-from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-from crawl4ai.content_filter_strategy import PruningContentFilter
 from tqdm.asyncio import tqdm_asyncio
-
-async def crawl_urls_crawl4ai(urls: List[str], concurrent: int = 3) -> List[Dict]:
-    """Fast headless crawling with Crawl4AI"""
-    browser_config = BrowserConfig(headless=True)
-    run_config = CrawlerRunConfig(
-        markdown_generator=DefaultMarkdownGenerator(
-            content_filter=PruningContentFilter(threshold=0.6),
-            options={"ignore_links": True},
-        )
-    )
-
-    results = []
-    semaphore = asyncio.Semaphore(concurrent)
-
-    async def crawl_one(url):
-        async with semaphore:
-            try:
-                async with AsyncWebCrawler(config=browser_config) as crawler:
-                    result = await crawler.arun(url=url, config=run_config)
-                    markdown = (
-                        getattr(getattr(result, "markdown", None), "fit_markdown", "")
-                        or getattr(getattr(result, "markdown", None), "raw_markdown", "")
-                        or ""
-                    )
-                    results.append({"url": url, "content": markdown})
-                    print(f"✅ {url} ({len(markdown)} chars)")
-            except Exception as e:
-                print(f"❌ Crawl failed: {url}: {e}")
-                results.append({"url": url, "error": str(e)})
-
-    await asyncio.gather(*(crawl_one(u) for u in urls))
-    return results
 
 
 async def crawl_urls_playwright(urls: List[str], headless: bool = True) -> List[Dict]:

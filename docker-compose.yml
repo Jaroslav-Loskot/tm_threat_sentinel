@@ -1,14 +1,14 @@
 version: "3.9"
 
 services:
-  threatmark-ai-bot:
-    container_name: vulnerability-scanner-bot
+  tm_threat_sentinel:
+    container_name: tm_threat_sentinel-bot
 
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        INCLUDE_DEV: "false"
+        INCLUDE_DEV: "false"   # Skip dev dependencies in production
 
     environment:
       # Core runtime
@@ -16,7 +16,7 @@ services:
       LOGURU_LEVEL: "INFO"
       TZ: "Europe/Prague"
 
-      # Slack
+      # Slack integration
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
       SLACK_CHANNEL_NAME: ${SLACK_CHANNEL_NAME}
       POLL_INTERVAL: ${POLL_INTERVAL:-60}
@@ -25,22 +25,32 @@ services:
       ALERT_EMAILS: ${ALERT_EMAILS}
       ALERT_THRESHOLD: ${ALERT_THRESHOLD:-4}
 
-      # LLM connector
+      # LLM connector (LiteLLM Proxy / Bedrock)
       LITELLM_MODEL: ${LITELLM_MODEL}
       LITELLM_BASE_URL: ${LITELLM_BASE_URL}
       LITELLM_API_KEY: ${LITELLM_API_KEY}
 
+    # Persistent data storage
     volumes:
-      - ./data:/app/data
+      - tm_threat_sentinel_data:/app/data
       - ./scripts:/app/scripts
 
+    # Always restart unless explicitly stopped
     restart: unless-stopped
 
-    # ✅ Runs your Channel Monitor version of main_threatintel
+    # Run main entrypoint
     command: ["uv", "run", "-m", "src.main_threatintel"]
 
+    # Healthcheck (validates Slack token presence)
     healthcheck:
       test: ["CMD", "test", "-n", "$$SLACK_BOT_TOKEN"]
       interval: 60s
       timeout: 5s
       retries: 3
+
+    # Ensure Playwright dependencies available (if needed)
+    shm_size: "2gb"
+
+volumes:
+  tm_threat_sentinel_data:
+    name: tm_threat_sentinel_data
