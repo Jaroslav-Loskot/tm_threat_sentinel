@@ -42,7 +42,9 @@ MAX_K_MESSAGES = int(os.getenv("MAX_K_MESSAGES", "10"))
 class ChannelMonitorPipeline(BasePipeline):
     name = "Slack Channel Monitor"
 
-    URL_PATTERN = re.compile(r"https?://[^\s<>|]+")
+    URL_PATTERN = re.compile(
+        r"<(https?://[^>|]+)(?:\|[^>]+)?>|(?<!<)(https?://[^\s>]+)"
+    )
     SECTION_PATTERN = re.compile(
         r"(?is)(?:\*\*|\*|#+|\s|^)*(Summary|Potential Impact|Relevance|Severity|Recommended Actions)[:\-]\s*(.*?)"
         r"(?=\n\s*(?:\*\*|\*|#+)?\s*(Summary|Potential Impact|Relevance|Severity|Recommended Actions)[:\-]|\Z)",
@@ -102,22 +104,48 @@ class ChannelMonitorPipeline(BasePipeline):
                 await self._process_url(ts, url)
 
     # ============================================================
-    # 🔍 Message scanning
+    # 🔍 Message scanning (updated)
     # ============================================================
-
     async def _find_new_urls(self, messages) -> List[tuple[str, str]]:
         new_urls = []
         logger.debug(f"🔍 Scanning {len(messages)} messages for URLs...")
+
         for msg in messages:
-            if msg.get("subtype") == "bot_message" or msg.get("user") == self.bot_user_id:
-                continue
             ts = msg.get("ts", "")
-            urls_found = self.URL_PATTERN.findall(msg.get("text", ""))
+            user = msg.get("user")
+            bot_id = msg.get("bot_id")
+            subtype = msg.get("subtype")
+            text = msg.get("text", "") or ""
+
+            # Skip own bot messages or system events
+            if (
+                subtype in {"channel_join", "channel_leave", "channel_topic"}
+                or user == self.bot_user_id
+                or bot_id == self.bot_user_id
+            ):
+                logger.trace(
+                    f"🤖 Skipping self/system message ts={ts} subtype={subtype}"
+                )
+                continue
+
+            # Extract URLs — Slack may wrap them like <https://foo|label>
+            urls_found = []
+            for m in self.URL_PATTERN.findall(text):
+                url = m[0] or m[1]
+                if url:
+                    urls_found.append(url.strip("<>"))
+
             if urls_found:
                 logger.debug(f"🧩 Found URLs in ts={ts}: {urls_found}")
+
             for url in urls_found:
                 if url not in self.seen_urls:
+                    logger.info(f"🌐 New URL detected: {url}")
                     new_urls.append((ts, url))
+                    self._mark_seen(url)
+                else:
+                    logger.trace(f"⏩ Already processed: {url}")
+
         logger.debug(f"📊 Total new URLs found: {len(new_urls)}")
         return new_urls
 
