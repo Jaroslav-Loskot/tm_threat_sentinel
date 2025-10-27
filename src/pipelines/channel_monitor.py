@@ -134,9 +134,10 @@ def build_slack_blocks(url: str, data: Dict[str, str]) -> List[Dict]:
     ]
 
 
-# ============================================================
-# 🎨 Emoji + Alerts
-# ============================================================
+# ==============================================================
+# 🎨 Emoji + Alerts - IMPROVED VERSION
+# ==============================================================
+
 def get_severity_emojis(severity: str, relevance_text: str) -> List[str]:
     """Choose emojis based on severity and relevance."""
     severity = (severity or "").strip().lower()
@@ -144,24 +145,27 @@ def get_severity_emojis(severity: str, relevance_text: str) -> List[str]:
     match = re.search(r"\d+", relevance_text or "")
     if match:
         relevance = int(match.group())
-
+    
+    print(f"🎨 Determining emoji - Severity: '{severity}', Relevance: {relevance}")
+    
     if severity == "critical":
         return ["red_circle", "bangbang"]  # 🔴‼️
     if severity == "red":
         return ["red_circle"]  # 🔴
     if severity == "amber":
-        return ["orange_circle"]  # 🟠
+        return ["large_orange_circle"]  # 🟠 (note: changed from orange_circle)
     if severity == "green":
-        return ["green_circle"]  # 🟢
-
+        return ["large_green_circle"]  # 🟢 (note: changed from green_circle)
+    
     # fallback by relevance
     if relevance >= 5:
         return ["red_circle", "bangbang"]
     if relevance >= 4:
         return ["red_circle"]
     if relevance >= 3:
-        return ["orange_circle"]
-    return ["green_circle"]
+        return ["large_orange_circle"]
+    
+    return ["large_green_circle"]
 
 
 def send_dm_alert(url: str, severity: str, relevance: str, impact: str):
@@ -203,64 +207,171 @@ def post_thread_reply(channel_id: str, parent_ts: str, text: str, blocks: list |
 
 
 def add_reaction(channel_id: str, ts: str, emoji: str):
+    """Add emoji reaction to a Slack message with detailed error logging."""
     try:
+        print(f"➕ Adding reaction '{emoji}' to message {ts[:10]}...")
         client.reactions_add(channel=channel_id, timestamp=ts, name=emoji)
+        print(f"✅ Successfully added reaction: {emoji}")
     except Exception as e:
-        if "already_reacted" not in str(e):
-            print(f"⚠️ Failed to add reaction: {e}")
+        error_msg = str(e)
+        if "already_reacted" in error_msg:
+            print(f"ℹ️ Already reacted with {emoji}")
+        elif "invalid_name" in error_msg:
+            print(f"⚠️ Invalid emoji name: {emoji} - trying fallback")
+            # Try fallback emojis
+            fallback_map = {
+                "green_circle": "large_green_circle",
+                "orange_circle": "large_orange_circle",
+                "red_circle": "red_circle",
+                "bangbang": "bangbang"
+            }
+            fallback = fallback_map.get(emoji)
+            if fallback and fallback != emoji:
+                try:
+                    client.reactions_add(channel=channel_id, timestamp=ts, name=fallback)
+                    print(f"✅ Used fallback emoji: {fallback}")
+                except Exception as e2:
+                    print(f"❌ Fallback also failed: {e2}")
+            else:
+                print(f"❌ No fallback available for {emoji}")
+        else:
+            print(f"⚠️ Failed to add reaction '{emoji}': {e}")
 
 
-# ============================================================
-# 🔁 Core logic — Single URL analysis
-# ============================================================
-async def process_url(channel_id: str, ts: str, url: str, model_name: str, seen_urls: Set[str]):
-    """Crawl → analyze → post results → react."""
+# ==============================================================
+# 🔁 Core logic — Single URL analysis - IMPROVED VERSION
+# ==============================================================
+
+
+async def process_url(
+    channel_id: str, ts: str, url: str, model_name: str, seen_urls: Set[str]
+):
+    """Crawl → analyze → post results → react. Only post if successful."""
+    print(f"\n{'='*60}")
     print(f"🔗 Processing URL: {url}")
+    print(f"📍 Message timestamp: {ts}")
+    print(f"{'='*60}\n")
 
     # --- Crawl ---
     try:
+        print(f"🕷️ Crawling {url}...")
         crawled = await crawl_urls_playwright([url])
         if not crawled or "error" in crawled[0]:
             raise ValueError(crawled[0].get("error", "Crawl failed"))
         content = crawled[0].get("content", "")
         if not content.strip():
             raise ValueError("Empty content")
+        print(f"✅ Crawled successfully ({len(content)} chars)")
     except Exception as e:
-        post_thread_reply(channel_id, ts, f"❌ Crawl failed for <{url}> → {e}")
+        print(f"❌ Crawl failed: {e}")
+        # Don't post anything to Slack on crawl failure
+        # Just mark as seen to avoid retrying
         seen_urls.add(url)
+        save_seen_urls(seen_urls)
         return
 
     # --- Analyze ---
+    print(f"🧠 Analyzing with {model_name}...")
     try:
-        result = analyze_article(url, content, model=model_name)
-        analysis_text = result.get("analysis") or result.get("error", "No analysis result")
+        result = analyze_article(url, content)
+
+        # Check if analysis returned an error
+        if "error" in result:
+            raise Exception(result["error"])
+
+        analysis_text = result.get("analysis", "")
+
+        if not analysis_text or not analysis_text.strip():
+            raise Exception("Empty analysis result")
+
+        print(f"✅ Analysis complete")
+        print(f"📝 Analysis preview: {analysis_text[:200]}...")
+
     except Exception as e:
-        analysis_text = f"Error during analysis: {e}"
+        print(f"❌ Analysis failed: {e}")
+        # Don't post anything to Slack on analysis failure
+        # Mark as seen to avoid infinite retries
+        seen_urls.add(url)
+        save_seen_urls(seen_urls)
+        return
 
     # --- Parse ---
-    parsed = parse_analysis_text(analysis_text)
-    severity = parsed.get("Severity", "")
-    relevance = parsed.get("Relevance", "")
-    impact = parsed.get("Potential Impact", "")
+    print(f"📊 Parsing analysis results...")
+    try:
+        parsed = parse_analysis_text(analysis_text)
+        severity = parsed.get("Severity", "").strip()
+        relevance = parsed.get("Relevance", "").strip()
+        impact = parsed.get("Potential Impact", "")
 
-    # --- Post thread ---
-    blocks = build_slack_blocks(url, parsed)
-    post_thread_reply(channel_id, ts, text=f"📊 ThreatMark Analysis for {url}", blocks=blocks)
+        print(f"🎯 Parsed Results:")
+        print(f"   Severity: '{severity}'")
+        print(f"   Relevance: '{relevance}'")
+        print(f"   Impact: {impact[:100]}...")
 
-    # --- Add emoji reactions ---
-    for emoji in get_severity_emojis(severity, relevance):
-        add_reaction(channel_id, ts, emoji)
+    except Exception as e:
+        print(f"❌ Parsing failed: {e}")
+        # Don't post malformed results
+        seen_urls.add(url)
+        save_seen_urls(seen_urls)
+        return
+
+    # --- Post thread (only if everything succeeded) ---
+    try:
+        print(f"💬 Posting analysis to Slack thread...")
+        blocks = build_slack_blocks(url, parsed)
+        post_thread_reply(
+            channel_id, ts, text=f"📊 ThreatMark Analysis for {url}", blocks=blocks
+        )
+        print(f"✅ Posted analysis to thread")
+    except Exception as e:
+        print(f"⚠️ Failed to post to Slack: {e}")
+        # Continue anyway - we at least tried
+
+    # --- Add emoji reactions (only if analysis succeeded) ---
+    try:
+        print(f"\n🎨 Adding severity emoji reactions...")
+        emojis = get_severity_emojis(severity, relevance)
+        print(f"   Selected emojis: {emojis}")
+
+        for emoji in emojis:
+            add_reaction(channel_id, ts, emoji)
+
+        print(f"✅ Added {len(emojis)} reaction(s)")
+    except Exception as e:
+        print(f"⚠️ Failed to add reactions: {e}")
+        # Non-critical failure, continue
 
     # --- DM alert if critical ---
-    send_dm_alert(url, severity, relevance, impact)
+    try:
+        if severity.lower() in ["critical", "red"]:
+            print(f"🚨 Sending DM alert for {severity.upper()} severity")
+            send_dm_alert(url, severity, relevance, impact)
+    except Exception as e:
+        print(f"⚠️ Failed to send DM alert: {e}")
+        # Non-critical failure, continue
 
     # --- Log + mark processed ---
     seen_urls.add(url)
     log_path = get_data_path("channel_analysis_log.json")
-    logs = load_json(log_path) if Path(log_path).exists() else []
-    logs.append({"url": url, "analysis": parsed})
-    save_json(logs, log_path)
+    try:
+        logs = load_json(log_path) if Path(log_path).exists() else []
+        logs.append(
+            {
+                "url": url,
+                "timestamp": datetime.utcnow().isoformat(),
+                "severity": severity,
+                "relevance": relevance,
+                "analysis": parsed,
+            }
+        )
+        save_json(logs, log_path)
+    except Exception as e:
+        print(f"⚠️ Failed to save log: {e}")
+
     save_seen_urls(seen_urls)
+
+    print(f"\n✅ Completed processing: {url}")
+    print(f"{'='*60}\n")
 
 
 # ============================================================
