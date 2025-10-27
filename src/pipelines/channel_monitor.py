@@ -155,24 +155,34 @@ class ChannelMonitorPipeline(BasePipeline):
     async def _process_url(self, ts: str, url: str):
         logger.info(f"\n🔗 Processing URL: {url}")
 
-        # --- Crawl ---
-        content = await self._crawl_url(url)
-        if not content:
-            return
-
-        # --- Analyze ---
-        analysis_text = await self._analyze_content(url, content)
-        if not analysis_text:
-            return
-
-        # --- Parse ---
-        parsed = self._parse_analysis(analysis_text)
-        severity = parsed.get("Severity", "").strip()
-        relevance = parsed.get("Relevance", "").strip()
-        impact = parsed.get("Potential Impact", "")
-
-        # --- Post to Slack ---
         try:
+            # --- Crawl ---
+            logger.info(f"🕷️ Crawling {url}...")
+            crawled = await crawl_urls_playwright([url])
+            if not crawled or "error" in crawled[0]:
+                raise ValueError(crawled[0].get("error", "Crawl failed"))
+
+            content = crawled[0].get("content", "")
+            if not content.strip():
+                raise ValueError("Empty content")
+            logger.success(f"✅ Crawled successfully ({len(content)} chars)")
+
+            # --- Analyze ---
+            logger.info(f"🧠 Analyzing with {self.model_name}...")
+            result = analyze_article(url, content)
+            analysis_text = result.get("analysis", "")
+            if not analysis_text:
+                raise ValueError("Empty analysis result")
+            logger.success("✅ Analysis complete")
+            logger.debug(f"📝 Preview: {analysis_text[:200]}...")
+
+            # --- Parse ---
+            parsed = self._parse_analysis(analysis_text)
+            severity = parsed.get("Severity", "").strip()
+            relevance = parsed.get("Relevance", "").strip()
+            impact = parsed.get("Potential Impact", "")
+
+            # --- Post to Slack ---
             blocks = build_analysis_blocks(url, parsed)
             await post_thread_reply_async(
                 self.channel_id,
@@ -181,16 +191,19 @@ class ChannelMonitorPipeline(BasePipeline):
                 blocks=blocks,
             )
             logger.success(f"✅ Posted analysis for {url}")
+
+            # --- React + Alert ---
+            await self._add_reactions(ts, severity, relevance)
+            await send_alert_dm_async(self.alert_emails, url, severity, relevance, impact)
+            logger.success(f"✅ Reactions & alerts done for {url}")
+
+            # --- Mark as processed (only now) ---
+            self._mark_processed(url, severity, relevance, parsed)
+            logger.success(f"🧾 Marked {url} as processed.")
+
         except Exception as e:
-            logger.error(f"❌ Failed to post analysis for {url}: {e}")
-
-        # --- React + Alert ---
-        await self._add_reactions(ts, severity, relevance)
-        await send_alert_dm_async(self.alert_emails, url, severity, relevance, impact)
-
-        # --- Mark as processed ---
-        self._mark_processed(url, severity, relevance, parsed)
-
+            logger.error(f"❌ Error while processing {url}: {e}")
+            # Do NOT mark as seen here — we’ll retry next cycle
     # ============================================================
     # 🌐 Crawl stage
     # ============================================================
@@ -209,7 +222,6 @@ class ChannelMonitorPipeline(BasePipeline):
             return content
         except Exception as e:
             logger.error(f"❌ Crawl failed for {url}: {e}")
-            self._mark_seen(url)
             return None
 
     # ============================================================
@@ -228,7 +240,6 @@ class ChannelMonitorPipeline(BasePipeline):
             return analysis_text
         except Exception as e:
             logger.error(f"❌ Analysis failed for {url}: {e}")
-            self._mark_seen(url)
             return None
 
     # ============================================================
