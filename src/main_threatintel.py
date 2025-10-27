@@ -7,23 +7,39 @@ import os
 
 load_dotenv()
 
-CHANNEL_NAME = os.getenv("SLACK_CHANNEL_NAME","")
-ALERT_EMAILS = os.getenv("SLACK_CHANNEL_NAME", "").split(",")
+CHANNEL_NAME = os.getenv("SLACK_CHANNEL_NAME", "")
+ALERT_EMAILS = (
+    os.getenv("ALERT_EMAILS", "").split(",") if os.getenv("ALERT_EMAILS") else []
+)
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))
+MAX_MESSAGE_AGE = os.getenv("MAX_MESSAGE_AGE", "7d")
+
+logger.debug(
+    f"🔧 Env config — CHANNEL_NAME={CHANNEL_NAME}, ALERT_EMAILS={ALERT_EMAILS}, POLL_INTERVAL={POLL_INTERVAL}, MAX_MESSAGE_AGE={MAX_MESSAGE_AGE}"
+)
+
 
 async def main():
-    # ✅ you can use channel name instead of ID
-    channel_id = get_channel_id_by_name(CHANNEL_NAME)
+    logger.info("🚀 Starting ThreatMark Channel Monitor...")
+
+    try:
+        channel_id = get_channel_id_by_name(CHANNEL_NAME)
+        logger.debug(f"✅ Resolved channel name '{CHANNEL_NAME}' → ID {channel_id}")
+    except Exception as e:
+        logger.error(f"❌ Could not resolve channel '{CHANNEL_NAME}': {e}")
+        return
 
     monitor = ChannelMonitorPipeline(
         channel_id=channel_id,
-        poll_interval=POLL_INTERVAL,  # check every 60s
+        poll_interval=POLL_INTERVAL,
         alert_emails=ALERT_EMAILS,
     )
 
-    logger.info("🚀 Starting ThreatMark Channel Monitor...")
-    await monitor.execute()  # infinite loop
+    await monitor.execute()
 
 
 if __name__ == "__main__":
+    # 🔹 Ensure debug logs visible in terminal
+    logger.remove()
+    logger.add(lambda msg: print(msg, end=""), level="DEBUG")
     asyncio.run(main())

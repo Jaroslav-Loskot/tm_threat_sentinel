@@ -50,5 +50,31 @@
       "Severity": "amberRationale\nRequires social engineering (user must click and approve consent)\nTargets Office365, which we use extensively\nPrimarily affects users who fall for phishing (not a direct exploit)\nMicrosoft is implementing fixes\nMitigations available through policy enforcementNot RED because: Requires user interaction and successful phishing; not a direct technical exploit of our infrastructure.",
       "Recommended Actions": "1. **Immediate:** Circulate security awareness notice to all staff, especially admins, about OAuth consent phishing via Copilot Studio links\n2. **Short-term:** Review and enforce strict OAuth application consent policies in Office365/Entra ID (disable user-level app registration if not already done)\n3. **Ongoing:** Monitor Entra ID logs for unusual OAuth consent grants, especially from external applications\n4. **Policy:** Ensure only verified publishers or organization-approved apps can request OAuth consent\n5. **Training:** Include this attack vector in next security awareness training cycle\n6. **Monitor:** Watch for Microsoft's security update addressing this issue and apply when available"
     }
+  },
+  {
+    "url": "https://www.bleepingcomputer.com/news/microsoft/azure-outage-blocks-access-to-microsoft-365-services-admin-portals/",
+    "timestamp": "2025-10-27T18:24:24.432817",
+    "severity": "green",
+    "relevance": "4\n(We use Office365, but this was a transient availability issue, not a security vulnerability)",
+    "analysis": {
+      "Summary": "Microsoft experienced an Azure Front Door CDN outage affecting Microsoft 365 services, Azure portals, and Entra portals primarily in Europe, Africa, and the Middle East. The incident lasted approximately 5 hours, caused by Kubernetes instance failures leading to capacity loss. Microsoft resolved the issue through instance restarts and service failovers, with full recovery confirmed. This is the third similar outage in recent months (July and October incidents).Affected Products\nOffice365 (Microsoft) — We use this for email, Office applications, and malware protection",
+      "Potential Impact": "Temporary loss of access to Office365 email and applications during the outage window. Since the incident has been fully mitigated and primarily affected Europe/Africa/Middle East regions during early morning hours (07:40-12:33 UTC), actual impact to ThreatMark operations was likely minimal. No data breach, security compromise, or persistent vulnerability involved — this was an availability incident only.",
+      "Relevance": "4\n(We use Office365, but this was a transient availability issue, not a security vulnerability)",
+      "Severity": "green",
+      "Recommended Actions": "Monitor for updates. This was a resolved availability incident with no security implications. No action required beyond normal awareness. If similar outages become frequent, consider reviewing business continuity plans for Office365 dependencies, but this is standard operational resilience rather than a security concern."
+    }
+  },
+  {
+    "url": "https://nukib.gov.cz/cs/infoservis/aktuality/2311-vydali-jsme-prehled-kybernetickych-incidentu-za-zari-2025/",
+    "timestamp": "2025-10-27T18:24:39.666016",
+    "severity": "green",
+    "relevance": "1 (Tangential - regional cybersecurity statistics, no specific technical details or banking sector focus)",
+    "analysis": {
+      "Summary": "NÚKIB (Czech National Cyber and Information Security Agency) published their September 2025 incident overview, reporting 24 cybersecurity incidents - the highest count this year. The majority (14 incidents) were DDoS attacks in the Availability category, with 10 confirmed DDoS cases (3 claimed by hacktivist groups). Seven incidents involved intrusions (Průnik category). This is a general statistical report about the Czech cybersecurity landscape with no specific vulnerabilities, exploits, or threats identified that would directly impact ThreatMark's infrastructure.Affected Products:** None",
+      "Potential Impact": "No direct impact. This is a high-level statistical summary of incidents in the Czech Republic. While ThreatMark operates in the Czech market and should maintain awareness of regional threat trends, this report contains no actionable intelligence about specific vulnerabilities, attack vectors, or threats targeting our infrastructure or the banking sector specifically.",
+      "Relevance": "1 (Tangential - regional cybersecurity statistics, no specific technical details or banking sector focus)",
+      "Severity": "green",
+      "Recommended Actions": "Monitor NÚKIB's X/Twitter profile (mentioned in article) for specific vulnerability alerts. This statistical report requires no immediate action but confirms DDoS remains a prevalent threat vector in the region - ensure our DDoS mitigation measures (HAProxy, network-level protections) remain current. Continue routine monitoring of NÚKIB publications for technical advisories that may follow."
+    }
   }
 ]

@@ -17,9 +17,9 @@ from loguru import logger
 
 from src.services.slack_manager import (
     client,
-    fetch_channel_messages,
     parse_duration_to_timedelta,
     get_channel_id_by_name,
+    fetch_channel_messages_last_k
 )
 from src.services.crawler_manager import crawl_urls_playwright
 from src.services.analyzer_manager import analyze_article
@@ -37,6 +37,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MAX_MESSAGE_AGE = os.getenv("MAX_MESSAGE_AGE", "7d")
+MAX_K_MESSAGES = int(os.getenv("MAX_K_MESSAGES", "10"))
 
 class ChannelMonitorPipeline(BasePipeline):
     name = "Slack Channel Monitor"
@@ -86,7 +87,9 @@ class ChannelMonitorPipeline(BasePipeline):
         logger.info(f"🤖 Bot user ID: {self.bot_user_id}")
 
         while True:
-            messages = fetch_channel_messages(self.channel_id)
+            messages = messages = fetch_channel_messages_last_k(
+                self.channel_id, k=MAX_K_MESSAGES
+            )
             logger.info(f"💬 Scanned {len(messages)} messages")
 
             new_urls = await self._find_new_urls(messages)
@@ -101,18 +104,21 @@ class ChannelMonitorPipeline(BasePipeline):
     # ============================================================
     # 🔍 Message scanning
     # ============================================================
+
     async def _find_new_urls(self, messages) -> List[tuple[str, str]]:
         new_urls = []
+        logger.debug(f"🔍 Scanning {len(messages)} messages for URLs...")
         for msg in messages:
-            if (
-                msg.get("subtype") == "bot_message"
-                or msg.get("user") == self.bot_user_id
-            ):
+            if msg.get("subtype") == "bot_message" or msg.get("user") == self.bot_user_id:
                 continue
             ts = msg.get("ts", "")
-            for url in self.URL_PATTERN.findall(msg.get("text", "")):
+            urls_found = self.URL_PATTERN.findall(msg.get("text", ""))
+            if urls_found:
+                logger.debug(f"🧩 Found URLs in ts={ts}: {urls_found}")
+            for url in urls_found:
                 if url not in self.seen_urls:
                     new_urls.append((ts, url))
+        logger.debug(f"📊 Total new URLs found: {len(new_urls)}")
         return new_urls
 
     # ============================================================

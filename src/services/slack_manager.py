@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from tqdm import tqdm
+from loguru import logger
 
 load_dotenv(override=True)
 
@@ -20,8 +21,6 @@ if not TOKEN:
     raise ValueError("Missing SLACK_BOT_TOKEN in environment (.env)")
 
 client = WebClient(token=TOKEN)
-
-
 
 
 # ==============================================================
@@ -45,59 +44,113 @@ def parse_duration_to_timedelta(value: str) -> timedelta:
         return timedelta(days=num * 30)
     return timedelta(days=num)
 
-# ==============================================================
-# 💬 Channel message fetcher (with age cutoff)
-# ==============================================================
-def fetch_channel_messages(channel_id: str, max_messages: int = 0) -> list[dict]:
-    """Fetch top-level messages from a Slack channel, limited by MAX_MESSAGE_AGE."""
-    max_age_str = os.getenv("MAX_MESSAGE_AGE", "7d")
-    cutoff_delta = parse_duration_to_timedelta(max_age_str)
-    cutoff_ts = (datetime.now() - cutoff_delta).timestamp()
 
-    cursor: str | None = None
+def fetch_channel_messages_last_k(channel_id: str, k: int = 10) -> list[dict]:
+    """
+    Fetch the last K most recent messages from a Slack channel.
+    Keeps it simple — no cutoff, no time filtering.
+    """
+    logger.debug(f"🧭 Fetching last {k} messages for channel={channel_id}")
+
+    try:
+        resp = client.conversations_history(channel=channel_id, limit=k)
+
+        messages = resp.get("messages") or []
+        logger.debug(f"📬 Slack returned {len(messages)} messages")
+
+        # Filter out bot/system messages if needed
+        filtered = [
+            m for m in messages if m.get("type") == "message" and "subtype" not in m
+        ]
+
+        logger.debug(f"✅ Kept {len(filtered)} user messages (after filtering)")
+        if filtered:
+            logger.debug(
+                f"🧾 Newest message ts={filtered[0]['ts']}, oldest={filtered[-1]['ts']}"
+            )
+
+        return filtered
+
+    except SlackApiError as e:
+        logger.error(f"⚠️ Slack API error: {e.response['error']}")
+        return []
+    except Exception as e:
+        logger.error(f"⚠️ Unexpected error: {e}")
+        return []
+
+
+def fetch_channel_messages(channel_id: str, max_messages: int = 0) -> list[dict]:
+    """
+    Fetch Slack messages strictly between (now - MAX_MESSAGE_AGE) and now.
+    """
+    from loguru import logger
+    from datetime import datetime, timezone
+
+    max_age_str = os.getenv("MAX_MESSAGE_AGE", "7h")
+    cutoff_delta = parse_duration_to_timedelta(max_age_str)
+    now_utc = datetime.now(timezone.utc)
+    cutoff_dt = now_utc - cutoff_delta
+
+    logger.debug(f"⏱️ Time-window fetch for channel={channel_id}")
+    logger.debug(
+        f"🕓 Cutoff datetime={cutoff_dt.isoformat()} → Now={now_utc.isoformat()}"
+    )
+
+    cursor = None
     messages_out: list[dict] = []
-    pbar = tqdm(total=max_messages if max_messages else None,
-                desc=f"📥 Messages {channel_id}", unit="msg")
+    total_fetched = 0
 
     while True:
         try:
-            resp = client.conversations_history(channel=channel_id, limit=200, cursor=cursor or "")
+            resp = client.conversations_history(
+                channel=channel_id,
+                limit=200,
+                cursor=cursor or "",
+                latest=str(now_utc.timestamp()),
+                oldest=str(cutoff_dt.timestamp()),
+                inclusive=True,
+            )
             messages = resp.get("messages") or []
+            if not messages:
+                logger.debug("⚠️ No messages returned in time window.")
+                break
+
+            logger.debug(
+                f"📬 Batch fetched {len(messages)} messages within time window"
+            )
 
             for msg in messages:
                 ts_val = float(msg.get("ts", 0))
-                if ts_val < cutoff_ts:
-                    # 🧹 stop early if we’ve reached older messages
-                    pbar.close()
-                    print(f"⏹️  Reached cutoff ({max_age_str}), stopping at {len(messages_out)} messages.")
-                    return messages_out
+                msg_dt = datetime.fromtimestamp(ts_val, timezone.utc)
+                if msg_dt < cutoff_dt or msg_dt > now_utc:
+                    continue  # out of window
 
-                # only main messages
+                if msg.get("subtype") == "bot_message":
+                    continue
                 if "thread_ts" in msg and msg["thread_ts"] != msg["ts"]:
                     continue
 
-                if msg.get("reply_count", 0) > 0:
-                    msg["replies_full"] = fetch_thread_replies(channel_id, msg["ts"])
-
                 messages_out.append(msg)
-                pbar.update(1)
-                if max_messages and len(messages_out) >= max_messages:
-                    pbar.close()
-                    return messages_out
+                total_fetched += 1
+
+                if max_messages and total_fetched >= max_messages:
+                    break
 
             cursor = (resp.get("response_metadata") or {}).get("next_cursor")
             if not cursor:
                 break
+
+            logger.debug(f"↩️ Paging backward, cursor exists → fetching next batch...")
             time.sleep(0.8)
 
         except SlackApiError as e:
-            print(f"⚠️ Error fetching messages: {e}")
+            logger.error(f"⚠️ Slack API error: {e}")
             break
 
-    pbar.close()
+    logger.debug(
+        f"✅ Finished fetch — kept {len(messages_out)} messages in last {max_age_str}"
+    )
     return messages_out
-
-
 
 
 # ----------------------------------------------------------------------
@@ -149,8 +202,6 @@ def fetch_thread_replies(channel_id: str, thread_ts: str) -> list[dict]:
             print(f"⚠️ Error fetching thread replies: {e}")
             break
     return replies
-
-
 
 
 # ----------------------------------------------------------------------
