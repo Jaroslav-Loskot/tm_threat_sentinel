@@ -1,4 +1,4 @@
-from src.connectors.litellm_connector import call_claude
+from src.adapters.litellm_connector import call_claude
 from src.converters.infrastructure_converter import load_infrastructure_context
 
 # Load infrastructure context once at module level

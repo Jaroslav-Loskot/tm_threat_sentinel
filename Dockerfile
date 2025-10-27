@@ -1,18 +1,20 @@
 # ==========================================================
-# 🐍 Base image with Python + uv
+# 🐍 ThreatMark Threat Intelligence Monitor (Dockerfile)
 # ==========================================================
+# - Uses uv + Python 3.12 for fast dependency management
+# - Installs Playwright (Chromium) for URL crawling
+# - Runs the Slack Channel Monitor by default
+# ==========================================================
+
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm AS base
 
 WORKDIR /app
 
-# Copy only dependency files first for better caching
-COPY pyproject.toml uv.lock* ./
+# ==========================================================
+# 📦 Dependency Installation (cached)
+# ==========================================================
+COPY pyproject.toml uv.lock* ./ 
 
-# ==========================================================
-# 📦 Install project dependencies
-# ==========================================================
-# By default, we install runtime deps only.
-# (In dev builds, we override with --dev using build args or compose override.)
 ARG INCLUDE_DEV=false
 RUN if [ "$INCLUDE_DEV" = "true" ]; then \
       echo "📦 Installing with dev dependencies..."; \
@@ -23,17 +25,38 @@ RUN if [ "$INCLUDE_DEV" = "true" ]; then \
     fi
 
 # ==========================================================
-# 🧩 Playwright setup
+# 🧩 Playwright + Chromium Setup
 # ==========================================================
-# Ensure Playwright + Chromium inside uv env
-RUN uv pip install playwright && uv run python -m playwright install --with-deps chromium
+RUN uv pip install --no-cache-dir playwright && \
+    uv run python -m playwright install --with-deps chromium
 
 # ==========================================================
-# 📂 Copy application source
+# ⚙️ Environment defaults
 # ==========================================================
-COPY src ./src
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    LOGURU_LEVEL=INFO \
+    TZ=Europe/Prague
 
 # ==========================================================
-# 🚀 Default Entrypoint (production)
+# 📂 Copy Source Code
 # ==========================================================
-CMD ["uv", "run", "-m", "src.main_channel"]
+COPY src/ ./src/
+
+# ==========================================================
+# 📦 Optionally copy data & scripts (safe fallback)
+# ==========================================================
+RUN mkdir -p /app/data /app/scripts && \
+    if [ -d "./data" ]; then cp -r ./data/* /app/data/ || true; fi && \
+    if [ -d "./scripts" ]; then cp -r ./scripts/* /app/scripts/ || true; fi
+
+# ==========================================================
+# 🧪 Healthcheck (Slack token validation)
+# ==========================================================
+HEALTHCHECK --interval=60s --timeout=5s --retries=3 CMD \
+    test -n "$SLACK_BOT_TOKEN" || exit 1
+
+# ==========================================================
+# 🚀 Default Entrypoint (Slack Channel Monitor)
+# ==========================================================
+CMD ["uv", "run", "-m", "src.main_threatintel"]

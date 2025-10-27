@@ -1,359 +1,264 @@
-# ============================================================
-# 📦 Threat Intelligence Channel Monitor
-# ============================================================
-import asyncio
-from datetime import datetime, timezone
-import re
-import json
-import os
-from typing import List, Dict, Set
-from pathlib import Path
-from dotenv import load_dotenv
+"""
+============================================================
+📦 Threat Intelligence Channel Monitor Pipeline
+============================================================
+Continuously monitors a Slack channel for URLs, crawls them,
+analyzes their content with LLMs, and posts summarized results.
+============================================================
+"""
 
-from src.core.slack_manager import client, fetch_channel_messages
-from src.core.crawler_manager import crawl_urls_playwright
-from src.core.analyzer_manager import analyze_article
+import asyncio
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Dict, Set
+from loguru import logger
+
+from src.services.slack_manager import (
+    client,
+    fetch_channel_messages,
+    parse_duration_to_timedelta,
+    get_channel_id_by_name,
+)
+from src.services.crawler_manager import crawl_urls_playwright
+from src.services.analyzer_manager import analyze_article
 from src.utils.file_utils import load_json, save_json
 from src.utils.path_utils import get_data_path
-
-load_dotenv(override=True)
-
-
-# ============================================================
-# ⚙️ Environment
-# ============================================================
-ALERT_EMAILS = [
-    e.strip() for e in os.getenv("ALERT_EMAILS", "").split(",") if e.strip()
-]
-ALERT_THRESHOLD = int(os.getenv("ALERT_THRESHOLD", "4"))
-
-URL_PATTERN = re.compile(r"https?://[^\s<>|]+")
-SECTION_PATTERN = re.compile(
-    r"(?is)(?:\*\*|\*|#+|\s|^)*(Summary|Potential Impact|Relevance|Severity|Recommended Actions)[:\-]\s*(.*?)"
-    r"(?=\n\s*(?:\*\*|\*|#+)?\s*(Summary|Potential Impact|Relevance|Severity|Recommended Actions)[:\-]|\Z)",
-    re.DOTALL,
+from src.utils.slack_helpers import (
+    post_thread_reply_async,
+    add_reaction_async,
+    build_analysis_blocks,
+    send_alert_dm_async,
 )
+from src.pipelines.base_pipeline import BasePipeline
 
 
-# ============================================================
-# 📦 Helpers — Seen URL tracking
-# ============================================================
-def load_seen_urls() -> set[str]:
-    """Load and auto-clean old seen URLs based on MAX_MESSAGE_AGE."""
-    path = get_data_path("seen_urls.json")
-    max_age_str = os.getenv("MAX_MESSAGE_AGE", "7d")
+class ChannelMonitorPipeline(BasePipeline):
+    name = "Slack Channel Monitor"
 
-    # reuse the same helper logic as in slack_manager
-    from src.core.slack_manager import parse_duration_to_timedelta
-    cutoff_delta = parse_duration_to_timedelta(max_age_str)
-    cutoff_time = datetime.now(timezone.utc) - cutoff_delta
-
-    if not Path(path).exists():
-        return set()
-
-    try:
-        data = load_json(path)
-        # keep only recent entries (with timestamp if available)
-        filtered = []
-        for item in data:
-            ts = item.get("timestamp")
-            if not ts:
-                filtered.append(item)
-                continue
-            try:
-                if datetime.fromisoformat(ts) >= cutoff_time:
-                    filtered.append(item)
-            except Exception:
-                filtered.append(item)
-        if len(filtered) != len(data):
-            save_json(filtered, path)
-        return {d["url"] for d in filtered if "url" in d}
-    except Exception:
-        return set()
-
-def save_seen_urls(urls: set[str]):
-    """Save seen URLs with timestamp for pruning."""
-    path = get_data_path("seen_urls.json")
-    now = datetime.utcnow().isoformat()
-    data = [{"url": u, "timestamp": now} for u in urls]
-    save_json(data, path)
-
-# ============================================================
-# 🧠 Parsing + Formatting
-# ============================================================
-def parse_analysis_text(text: str) -> Dict[str, str]:
-    """Parse LLM text output into structured fields."""
-    sections = {
-        "Summary": "",
-        "Potential Impact": "",
-        "Relevance": "",
-        "Severity": "",
-        "Recommended Actions": "",
-    }
-
-    if not text:
-        print("⚠️ Empty LLM text received")
-        return sections
-
-    matches = list(SECTION_PATTERN.finditer(text.replace("\r", "").strip()))
-    print(f"🔍 Found {len(matches)} structured sections")
-
-    if not matches:
-        sections["Summary"] = text.strip()
-        return sections
-
-    for match in matches:
-        key = match.group(1).strip().title()
-        val = re.sub(r"(^[\*\s:_\-]+|[\*\s:_\-]+$)", "", match.group(2), flags=re.MULTILINE).strip()
-        if key.lower().startswith("relevance"):
-            val = re.sub(r"(\d)\s*/\s*\d", r"\1", val)
-        sections[key] = val
-        print(f"✅ Parsed {key}: {val[:80]}")
-
-    return sections
-
-
-def build_slack_blocks(url: str, data: Dict[str, str]) -> List[Dict]:
-    """Format analysis result as Slack Block Kit message."""
-    relevance = data.get("Relevance", "N/A")
-    impact = data.get("Potential Impact", "N/A")
-
-    header = f"🧠 ThreatMark Intelligence Analysis"
-    fields = [
-        {"type": "mrkdwn", "text": f"📝 *Summary:*\n{data.get('Summary','N/A')}"},
-        {"type": "mrkdwn", "text": f"⚠️ *Impact:*\n{impact}"},
-        {"type": "mrkdwn", "text": f"🔢 *Relevance:*\n{relevance}"},
-        {"type": "mrkdwn", "text": f"🧭 *Actions:*\n{data.get('Recommended Actions','N/A')}"},
-    ]
-
-    return [
-        {"type": "header", "text": {"type": "plain_text", "text": header, "emoji": True}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*URL:* <{url}>"}},
-        {"type": "divider"},
-        {"type": "section", "fields": fields},
-    ]
-
-
-# ==============================================================
-# 🎨 Emoji + Alerts - IMPROVED VERSION
-# ==============================================================
-
-def get_severity_emojis(severity: str, relevance_text: str) -> List[str]:
-    """Choose emojis based on severity and relevance."""
-    severity = (severity or "").strip().lower()
-    relevance = 0
-    match = re.search(r"\d+", relevance_text or "")
-    if match:
-        relevance = int(match.group())
-    
-    print(f"🎨 Determining emoji - Severity: '{severity}', Relevance: {relevance}")
-    
-    if severity == "critical":
-        return ["red_circle", "bangbang"]  # 🔴‼️
-    if severity == "red":
-        return ["red_circle"]  # 🔴
-    if severity == "amber":
-        return ["large_orange_circle"]  # 🟠 (note: changed from orange_circle)
-    if severity == "green":
-        return ["large_green_circle"]  # 🟢 (note: changed from green_circle)
-    
-    # fallback by relevance
-    if relevance >= 5:
-        return ["red_circle", "bangbang"]
-    if relevance >= 4:
-        return ["red_circle"]
-    if relevance >= 3:
-        return ["large_orange_circle"]
-    
-    return ["large_green_circle"]
-
-
-def send_dm_alert(url: str, severity: str, relevance: str, impact: str):
-    """DM alert for high-severity threats."""
-    from src.core.slack_manager import send_direct_message  # lazy import to avoid circulars
-
-    if severity.lower() not in ["critical", "red"]:
-        print(f"ℹ️ No DM alert for severity={severity}")
-        return
-
-    alert_text = (
-        f"🚨 *High-severity threat detected!*\n"
-        f"<{url}>\n"
-        f"Severity: {severity}\n"
-        f"Relevance: {relevance}\n"
-        f"Impact: {impact[:200]}..."
+    URL_PATTERN = re.compile(r"https?://[^\s<>|]+")
+    SECTION_PATTERN = re.compile(
+        r"(?is)(?:\*\*|\*|#+|\s|^)*(Summary|Potential Impact|Relevance|Severity|Recommended Actions)[:\-]\s*(.*?)"
+        r"(?=\n\s*(?:\*\*|\*|#+)?\s*(Summary|Potential Impact|Relevance|Severity|Recommended Actions)[:\-]|\Z)",
+        re.DOTALL,
     )
-    for email in ALERT_EMAILS:
-        send_direct_message(email, alert_text)
-    print(f"📨 Sent {severity.upper()} DM alert → {url}")
 
+    def __init__(
+        self,
+        channel_id: str,
+        model_name: str = "claude",
+        poll_interval: int = 60,
+        alert_emails: List[str] | None = None,
+    ):
+        super().__init__(
+            channel_id=channel_id,
+            model_name=model_name,
+            poll_interval=poll_interval,
+            alert_emails=alert_emails,
+        )
 
-# ============================================================
-# 💬 Slack helpers
-# ============================================================
-def get_bot_user_id() -> str:
-    try:
-        return client.auth_test().get("user_id", "")
-    except Exception as e:
-        print(f"⚠️ Failed to get bot user ID: {e}")
-        return ""
+        # 🧭 Resolve channel name → ID if needed
+        if not channel_id.startswith("C"):
+            try:
+                resolved_id = get_channel_id_by_name(channel_id)
+                logger.info(f"✅ Resolved channel '{channel_id}' → {resolved_id}")
+                channel_id = resolved_id
+            except Exception as e:
+                logger.error(f"❌ Failed to resolve channel '{channel_id}': {e}")
 
+        self.channel_id = channel_id
+        self.model_name = model_name
+        self.poll_interval = poll_interval
+        self.alert_emails = alert_emails or []
+        self.seen_urls = self._load_seen_urls()
+        self.bot_user_id = self._get_bot_user_id()
 
-def post_thread_reply(channel_id: str, parent_ts: str, text: str, blocks: list | None = None):
-    try:
-        client.chat_postMessage(channel=channel_id, thread_ts=parent_ts, text=text, blocks=blocks or [])
-    except Exception as e:
-        print(f"⚠️ Failed to post Slack message: {e}")
+    # ============================================================
+    # 🔁 Main loop
+    # ============================================================
+    async def execute(self):
+        logger.info(f"👀 Monitoring Slack channel {self.channel_id}...")
+        logger.info(f"🤖 Bot user ID: {self.bot_user_id}")
 
+        while True:
+            messages = fetch_channel_messages(self.channel_id)
+            logger.info(f"💬 Scanned {len(messages)} messages")
 
-def add_reaction(channel_id: str, ts: str, emoji: str):
-    """Add emoji reaction to a Slack message with detailed error logging."""
-    try:
-        print(f"➕ Adding reaction '{emoji}' to message {ts[:10]}...")
-        client.reactions_add(channel=channel_id, timestamp=ts, name=emoji)
-        print(f"✅ Successfully added reaction: {emoji}")
-    except Exception as e:
-        error_msg = str(e)
-        if "already_reacted" in error_msg:
-            print(f"ℹ️ Already reacted with {emoji}")
-        elif "invalid_name" in error_msg:
-            print(f"⚠️ Invalid emoji name: {emoji} - trying fallback")
-            # Try fallback emojis
-            fallback_map = {
-                "green_circle": "large_green_circle",
-                "orange_circle": "large_orange_circle",
-                "red_circle": "red_circle",
-                "bangbang": "bangbang"
-            }
-            fallback = fallback_map.get(emoji)
-            if fallback and fallback != emoji:
-                try:
-                    client.reactions_add(channel=channel_id, timestamp=ts, name=fallback)
-                    print(f"✅ Used fallback emoji: {fallback}")
-                except Exception as e2:
-                    print(f"❌ Fallback also failed: {e2}")
-            else:
-                print(f"❌ No fallback available for {emoji}")
-        else:
-            print(f"⚠️ Failed to add reaction '{emoji}': {e}")
+            new_urls = await self._find_new_urls(messages)
+            if not new_urls:
+                logger.info(f"🕐 No new URLs found. Sleeping {self.poll_interval}s...")
+                await asyncio.sleep(self.poll_interval)
+                continue
 
+            for ts, url in new_urls:
+                await self._process_url(ts, url)
 
-# ==============================================================
-# 🔁 Core logic — Single URL analysis - IMPROVED VERSION
-# ==============================================================
+    # ============================================================
+    # 🔍 Message scanning
+    # ============================================================
+    async def _find_new_urls(self, messages) -> List[tuple[str, str]]:
+        new_urls = []
+        for msg in messages:
+            if (
+                msg.get("subtype") == "bot_message"
+                or msg.get("user") == self.bot_user_id
+            ):
+                continue
+            ts = msg.get("ts", "")
+            for url in self.URL_PATTERN.findall(msg.get("text", "")):
+                if url not in self.seen_urls:
+                    new_urls.append((ts, url))
+        return new_urls
 
+    # ============================================================
+    # 🧩 URL processing (crawl → analyze → post)
+    # ============================================================
+    async def _process_url(self, ts: str, url: str):
+        logger.info(f"\n🔗 Processing URL: {url}")
 
-async def process_url(
-    channel_id: str, ts: str, url: str, model_name: str, seen_urls: Set[str]
-):
-    """Crawl → analyze → post results → react. Only post if successful."""
-    print(f"\n{'='*60}")
-    print(f"🔗 Processing URL: {url}")
-    print(f"📍 Message timestamp: {ts}")
-    print(f"{'='*60}\n")
+        # --- Crawl ---
+        content = await self._crawl_url(url)
+        if not content:
+            return
 
-    # --- Crawl ---
-    try:
-        print(f"🕷️ Crawling {url}...")
-        crawled = await crawl_urls_playwright([url])
-        if not crawled or "error" in crawled[0]:
-            raise ValueError(crawled[0].get("error", "Crawl failed"))
-        content = crawled[0].get("content", "")
-        if not content.strip():
-            raise ValueError("Empty content")
-        print(f"✅ Crawled successfully ({len(content)} chars)")
-    except Exception as e:
-        print(f"❌ Crawl failed: {e}")
-        # Don't post anything to Slack on crawl failure
-        # Just mark as seen to avoid retrying
-        seen_urls.add(url)
-        save_seen_urls(seen_urls)
-        return
+        # --- Analyze ---
+        analysis_text = await self._analyze_content(url, content)
+        if not analysis_text:
+            return
 
-    # --- Analyze ---
-    print(f"🧠 Analyzing with {model_name}...")
-    try:
-        result = analyze_article(url, content)
-
-        # Check if analysis returned an error
-        if "error" in result:
-            raise Exception(result["error"])
-
-        analysis_text = result.get("analysis", "")
-
-        if not analysis_text or not analysis_text.strip():
-            raise Exception("Empty analysis result")
-
-        print(f"✅ Analysis complete")
-        print(f"📝 Analysis preview: {analysis_text[:200]}...")
-
-    except Exception as e:
-        print(f"❌ Analysis failed: {e}")
-        # Don't post anything to Slack on analysis failure
-        # Mark as seen to avoid infinite retries
-        seen_urls.add(url)
-        save_seen_urls(seen_urls)
-        return
-
-    # --- Parse ---
-    print(f"📊 Parsing analysis results...")
-    try:
-        parsed = parse_analysis_text(analysis_text)
+        # --- Parse ---
+        parsed = self._parse_analysis(analysis_text)
         severity = parsed.get("Severity", "").strip()
         relevance = parsed.get("Relevance", "").strip()
         impact = parsed.get("Potential Impact", "")
 
-        print(f"🎯 Parsed Results:")
-        print(f"   Severity: '{severity}'")
-        print(f"   Relevance: '{relevance}'")
-        print(f"   Impact: {impact[:100]}...")
+        # --- Post to Slack ---
+        try:
+            blocks = build_analysis_blocks(url, parsed)
+            await post_thread_reply_async(
+                self.channel_id,
+                ts,
+                text=f"📊 ThreatMark Analysis for {url}",
+                blocks=blocks,
+            )
+            logger.success(f"✅ Posted analysis for {url}")
+        except Exception as e:
+            logger.error(f"❌ Failed to post analysis for {url}: {e}")
 
-    except Exception as e:
-        print(f"❌ Parsing failed: {e}")
-        # Don't post malformed results
-        seen_urls.add(url)
-        save_seen_urls(seen_urls)
-        return
+        # --- React + Alert ---
+        await self._add_reactions(ts, severity, relevance)
+        await send_alert_dm_async(self.alert_emails, url, severity, relevance, impact)
 
-    # --- Post thread (only if everything succeeded) ---
-    try:
-        print(f"💬 Posting analysis to Slack thread...")
-        blocks = build_slack_blocks(url, parsed)
-        post_thread_reply(
-            channel_id, ts, text=f"📊 ThreatMark Analysis for {url}", blocks=blocks
-        )
-        print(f"✅ Posted analysis to thread")
-    except Exception as e:
-        print(f"⚠️ Failed to post to Slack: {e}")
-        # Continue anyway - we at least tried
+        # --- Mark as processed ---
+        self._mark_processed(url, severity, relevance, parsed)
 
-    # --- Add emoji reactions (only if analysis succeeded) ---
-    try:
-        print(f"\n🎨 Adding severity emoji reactions...")
-        emojis = get_severity_emojis(severity, relevance)
-        print(f"   Selected emojis: {emojis}")
+    # ============================================================
+    # 🌐 Crawl stage
+    # ============================================================
+    async def _crawl_url(self, url: str) -> str | None:
+        try:
+            logger.info(f"🕷️ Crawling {url}...")
+            crawled = await crawl_urls_playwright([url])
+            if not crawled or "error" in crawled[0]:
+                raise ValueError(crawled[0].get("error", "Crawl failed"))
 
+            content = crawled[0].get("content", "")
+            if not content.strip():
+                raise ValueError("Empty content")
+
+            logger.success(f"✅ Crawled successfully ({len(content)} chars)")
+            return content
+        except Exception as e:
+            logger.error(f"❌ Crawl failed for {url}: {e}")
+            self._mark_seen(url)
+            return None
+
+    # ============================================================
+    # 🧠 Analysis stage
+    # ============================================================
+    async def _analyze_content(self, url: str, content: str) -> str | None:
+        try:
+            logger.info(f"🧠 Analyzing with {self.model_name}...")
+            result = analyze_article(url, content)
+            analysis_text = result.get("analysis", "")
+            if not analysis_text:
+                raise ValueError("Empty analysis result")
+
+            logger.success("✅ Analysis complete")
+            logger.debug(f"📝 Preview: {analysis_text[:200]}...")
+            return analysis_text
+        except Exception as e:
+            logger.error(f"❌ Analysis failed for {url}: {e}")
+            self._mark_seen(url)
+            return None
+
+    # ============================================================
+    # 📊 Parsing stage
+    # ============================================================
+    def _parse_analysis(self, text: str) -> Dict[str, str]:
+        sections = {
+            "Summary": "",
+            "Potential Impact": "",
+            "Relevance": "",
+            "Severity": "",
+            "Recommended Actions": "",
+        }
+
+        if not text:
+            return sections
+
+        matches = list(self.SECTION_PATTERN.finditer(text.replace("\r", "").strip()))
+        if not matches:
+            sections["Summary"] = text.strip()
+            return sections
+
+        for match in matches:
+            key = match.group(1).strip().title()
+            val = re.sub(
+                r"(^[\*\s:_\-]+|[\*\s:_\-]+$)", "", match.group(2), flags=re.MULTILINE
+            ).strip()
+            if key.lower().startswith("relevance"):
+                val = re.sub(r"(\d)\s*/\s*\d", r"\1", val)
+            sections[key] = val
+        return sections
+
+    # ============================================================
+    # 🎨 Reactions
+    # ============================================================
+    async def _add_reactions(self, ts: str, severity: str, relevance: str):
+        emojis = self._get_severity_emojis(severity, relevance)
         for emoji in emojis:
-            add_reaction(channel_id, ts, emoji)
+            await add_reaction_async(self.channel_id, ts, emoji)
 
-        print(f"✅ Added {len(emojis)} reaction(s)")
-    except Exception as e:
-        print(f"⚠️ Failed to add reactions: {e}")
-        # Non-critical failure, continue
+    def _get_severity_emojis(self, severity: str, relevance_text: str) -> List[str]:
+        severity = (severity or "").strip().lower()
+        match = re.search(r"\d+", relevance_text or "")
+        relevance = int(match.group()) if match else 0
 
-    # --- DM alert if critical ---
-    try:
-        if severity.lower() in ["critical", "red"]:
-            print(f"🚨 Sending DM alert for {severity.upper()} severity")
-            send_dm_alert(url, severity, relevance, impact)
-    except Exception as e:
-        print(f"⚠️ Failed to send DM alert: {e}")
-        # Non-critical failure, continue
+        if severity == "critical":
+            return ["red_circle", "bangbang"]
+        if severity == "red":
+            return ["red_circle"]
+        if severity == "amber":
+            return ["large_orange_circle"]
+        if severity == "green":
+            return ["large_green_circle"]
+        if relevance >= 5:
+            return ["red_circle", "bangbang"]
+        if relevance >= 4:
+            return ["red_circle"]
+        if relevance >= 3:
+            return ["large_orange_circle"]
+        return ["large_green_circle"]
 
-    # --- Log + mark processed ---
-    seen_urls.add(url)
-    log_path = get_data_path("channel_analysis_log.json")
-    try:
+    # ============================================================
+    # 🧾 Persistence
+    # ============================================================
+    def _mark_processed(
+        self, url: str, severity: str, relevance: str, analysis: Dict[str, str]
+    ):
+        self._mark_seen(url)
+        log_path = get_data_path("channel_analysis_log.json")
         logs = load_json(log_path) if Path(log_path).exists() else []
         logs.append(
             {
@@ -361,44 +266,48 @@ async def process_url(
                 "timestamp": datetime.utcnow().isoformat(),
                 "severity": severity,
                 "relevance": relevance,
-                "analysis": parsed,
+                "analysis": analysis,
             }
         )
         save_json(logs, log_path)
-    except Exception as e:
-        print(f"⚠️ Failed to save log: {e}")
 
-    save_seen_urls(seen_urls)
+    def _mark_seen(self, url: str):
+        self.seen_urls.add(url)
+        self._save_seen_urls(self.seen_urls)
 
-    print(f"\n✅ Completed processing: {url}")
-    print(f"{'='*60}\n")
+    def _load_seen_urls(self) -> Set[str]:
+        path = get_data_path("seen_urls.json")
+        cutoff_delta = parse_duration_to_timedelta("7d")
+        cutoff_time = datetime.now(timezone.utc) - cutoff_delta
+        if not Path(path).exists():
+            return set()
+        try:
+            data = load_json(path)
+            filtered = []
+            for item in data:
+                ts = item.get("timestamp")
+                if not ts:
+                    filtered.append(item)
+                    continue
+                try:
+                    if datetime.fromisoformat(ts) >= cutoff_time:
+                        filtered.append(item)
+                except Exception:
+                    filtered.append(item)
+            if len(filtered) != len(data):
+                save_json(filtered, path)
+            return {d["url"] for d in filtered if "url" in d}
+        except Exception:
+            return set()
 
+    def _save_seen_urls(self, urls: Set[str]):
+        now = datetime.utcnow().isoformat()
+        data = [{"url": u, "timestamp": now} for u in urls]
+        save_json(data, get_data_path("seen_urls.json"))
 
-# ============================================================
-# 🚀 Monitor Channel Loop
-# ============================================================
-async def monitor_channel(channel_id: str, model_name="claude", poll_interval=60):
-    print(f"👀 Monitoring Slack channel {channel_id}...")
-    seen_urls = load_seen_urls()
-    bot_user_id = get_bot_user_id()
-    print(f"🤖 Bot user ID: {bot_user_id}")
-
-    while True:
-        messages = fetch_channel_messages(channel_id)
-        print(f"💬 Scanned {len(messages)} messages")
-
-        new_found = False
-        for msg in messages:
-            if msg.get("subtype") == "bot_message" or msg.get("user") == bot_user_id:
-                continue
-
-            urls = URL_PATTERN.findall(msg.get("text", ""))
-            ts = msg.get("ts", "")
-            for url in urls:
-                if url not in seen_urls:
-                    new_found = True
-                    await process_url(channel_id, ts, url, model_name, seen_urls)
-
-        if not new_found:
-            print(f"🕐 No new URLs found. Sleeping {poll_interval}s...")
-        await asyncio.sleep(poll_interval)
+    def _get_bot_user_id(self) -> str:
+        try:
+            return client.auth_test().get("user_id", "")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to get bot user ID: {e}")
+            return ""

@@ -1,52 +1,40 @@
-import json
 from pathlib import Path
 from tqdm import tqdm
-
-from src.core.analyzer_manager import analyze_article
+from src.services.analyzer_manager import analyze_article
 from src.utils.file_utils import load_json, save_json
 from src.utils.path_utils import get_data_path
+from src.pipelines.base_pipeline import BasePipeline
 
 
-def run_crawled_to_analysis(input_path: str | Path, model_name: str = "claude") -> Path:
-    """
-    Read crawled article data and analyze each entry using Claude/Nova.
-    Displays a progress bar and saves structured results.
-    """
-    input_path = Path(input_path)
-    if not input_path.exists():
-        raise FileNotFoundError(f"❌ Input file not found: {input_path}")
+class CrawledToAnalysisPipeline(BasePipeline):
+    name = "Crawled → Analysis"
 
-    # Load crawled articles
-    articles = load_json(input_path)
-    print(f"🧩 Loaded {len(articles)} crawled articles for LLM analysis")
+    def __init__(self, input_path: str | Path, model_name: str = "claude"):
+        super().__init__(input_path=input_path, model_name=model_name)
+        self.input_path = Path(input_path)
+        self.model_name = model_name
 
-    analyses = []
-    errors = 0
+    async def execute(self) -> Path:
+        if not self.input_path.exists():
+            raise FileNotFoundError(f"❌ Input file not found: {self.input_path}")
 
-    # Progress bar
-    for article in tqdm(articles, desc="🧠 Analyzing with LLM", unit="doc"):
-        url = article.get("url")
-        text = article.get("content", "")
+        articles = load_json(self.input_path)
+        print(f"🧩 Loaded {len(articles)} crawled articles for LLM analysis")
 
-        if not text.strip():
-            tqdm.write(f"⚠️ Skipping empty content: {url}")
-            continue
+        analyses = []
+        errors = 0
+        for article in tqdm(articles, desc="🧠 Analyzing with LLM", unit="doc"):
+            url = article.get("url")
+            text = article.get("content", "")
+            if not text.strip():
+                continue
+            try:
+                result = analyze_article(url, text)
+                analyses.append(result)
+            except Exception as e:
+                errors += 1
+                analyses.append({"url": url, "error": str(e)})
 
-        try:
-            result = analyze_article(url, text, model_name)
-            analyses.append(result)
-            tqdm.write(f"✅ {url[:80]}")
-        except Exception as e:
-            errors += 1
-            tqdm.write(f"❌ {url[:80]} → {e}")
-            analyses.append({"url": url, "error": str(e)})
-
-    # Save results
-    out_path = get_data_path("threat-intelligence_analysis.json")
-    save_json(analyses, out_path)
-
-    print(f"\n💾 Saved {len(analyses)} analyses → {out_path}")
-    if errors:
-        print(f"⚠️ {errors} analyses failed (check log for details)")
-
-    return out_path
+        out_path = get_data_path("threat-intelligence_analysis.json")
+        save_json(analyses, out_path)
+        return out_path
