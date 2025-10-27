@@ -9,6 +9,7 @@ analyzes their content with LLMs, and posts summarized results.
 
 import asyncio
 import re
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Set
@@ -31,7 +32,11 @@ from src.utils.slack_helpers import (
     send_alert_dm_async,
 )
 from src.pipelines.base_pipeline import BasePipeline
+from dotenv import load_dotenv
 
+load_dotenv()
+
+MAX_MESSAGE_AGE = os.getenv("MAX_MESSAGE_AGE", "7d")
 
 class ChannelMonitorPipeline(BasePipeline):
     name = "Slack Channel Monitor"
@@ -277,7 +282,7 @@ class ChannelMonitorPipeline(BasePipeline):
 
     def _load_seen_urls(self) -> Set[str]:
         path = get_data_path("seen_urls.json")
-        cutoff_delta = parse_duration_to_timedelta("7d")
+        cutoff_delta = parse_duration_to_timedelta(MAX_MESSAGE_AGE)
         cutoff_time = datetime.now(timezone.utc) - cutoff_delta
         if not Path(path).exists():
             return set()
