@@ -39,7 +39,6 @@ logs/
 debug.log
 
 # --- Local Data ---
-data/
 !src/utils/path_utils.py      # keep the helper itself
 !src/__init__.py
 !src/utils/__init__.py
@@ -93,3 +92,6 @@ playwright/.cache/
 # --- Custom
 
 source_code.txt
+
+src/data/infrastructure/processed/*
+src/data/infrastructure/raw/*

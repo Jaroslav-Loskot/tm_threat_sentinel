@@ -1,0 +1,28 @@
+[
+  {
+    "url": "https://thehackernews.com/2025/10/hackers-access-sonicwall-cloud-firewall.html",
+    "timestamp": "2025-10-27T15:11:01.220854",
+    "severity": "green",
+    "relevance": "2\n(Security incident in network infrastructure space, but not our vendor or technology stack. Relevant only as industry awareness for API security practices)",
+    "analysis": {
+      "Summary": "SonicWall disclosed that unauthorized actors accessed cloud-stored firewall configuration backup files for ALL customers using their cloud backup service (initially claimed <5%, now confirmed 100%). The files contain encrypted credentials and configuration data. The breach resulted from a brute-force attack against SonicWall's cloud backup API, which lacked basic protections like rate limiting. While credentials are encrypted, attackers can attempt offline cracking and use configuration data (firewall rules, routing configs) for targeted attacks. SonicWall has released assessment tools and is urging customers to check their MySonicWall portal for device impact status.Affected Products\nNone (ThreatMark does not use SonicWall products based on infrastructure inventory)",
+      "Potential Impact": "No direct impact to ThreatMark infrastructure. We do not use SonicWall firewalls or cloud backup services. However, this incident serves as a reminder about API security best practices (rate limiting, authentication controls) for our own externally-facing services like GitLab, Harbor, and HAProxy.",
+      "Relevance": "2\n(Security incident in network infrastructure space, but not our vendor or technology stack. Relevant only as industry awareness for API security practices)",
+      "Severity": "green",
+      "Recommended Actions": "No immediate action required (we don't use SonicWall)\nConsider reviewing rate limiting and authentication controls on our external-facing APIs (GitLab, Harbor, HAProxy, Kubernetes API if exposed)\nMonitor for any supply chain implications if partners/customers use SonicWall devices\nDocument as industry lesson learned for API security hardening"
+    }
+  },
+  {
+    "url": "https://thehackernews.com/2025/10/threatsday-bulletin-ms-teams-hack-mfa.html",
+    "timestamp": "2025-10-27T15:12:25.507083",
+    "severity": "green",
+    "relevance": "2\nMS Teams is in our stack (Office365), but the threat requires prior compromise\nOther items are general threat intelligence or unrelated products\nNo banking/fraud-specific intelligence\nNo critical vulnerabilities in our exact product versions",
+    "analysis": {
+      "Summary": "This bulletin covers multiple threats including Microsoft Teams abuse for extortion/social engineering, LNK-based malware campaigns, AI disinformation operations, EU Chat Control debate, an Autodesk Revit RCE vulnerability, Apple Siri privacy investigation, and North Korean crypto theft totaling $2B in 2025. Most items are either not directly relevant to ThreatMark's infrastructure or represent general threat intelligence rather than specific vulnerabilities requiring immediate action.Affected Products\nMicrosoft Teams** (used internally for collaboration)\nAutodesk Revit** (not in our infrastructure inventory)",
+      "Potential Impact": "MS Teams abuse**: Low risk. Our Teams instance is externally hosted (Office365/Microsoft SaaS). The described attacks require prior compromise or social engineering success. Standard identity protection and MFA policies should mitigate these tactics.\nLNK malware campaign**: Minimal direct impact. This is a phishing/social engineering threat targeting end users, not infrastructure vulnerabilities. Existing email security (Office365 malware protection) should provide defense.\nOther items**: No direct infrastructure impact (AI disinfo, EU regulation, Siri investigation, crypto theft are not relevant to our operations).",
+      "Relevance": "2\nMS Teams is in our stack (Office365), but the threat requires prior compromise\nOther items are general threat intelligence or unrelated products\nNo banking/fraud-specific intelligence\nNo critical vulnerabilities in our exact product versions",
+      "Severity": "green",
+      "Recommended Actions": "1. **MS Teams**: Verify MFA enforcement for all Office365/Teams accounts; review Teams external access policies; ensure security awareness training covers social engineering via collaboration platforms\n2. **General**: Monitor for updates; maintain existing email security and endpoint protection\n3. **No urgent patching required** - this is threat intelligence rather than vulnerability disclosure"
+    }
+  }
+]
