@@ -45,29 +45,50 @@ def parse_duration_to_timedelta(value: str) -> timedelta:
     return timedelta(days=num)
 
 
-def fetch_channel_messages_last_k(channel_id: str, k: int = 10) -> list[dict]:
+def fetch_channel_messages_last_k(
+    channel_id: str, bot_user_id: str | None = None, k: int = 10
+) -> list[dict]:
     """
     Fetch the last K most recent messages from a Slack channel.
-    Keeps it simple — no cutoff, no time filtering.
+    Includes bot messages (useful for news feeds) but safely skips
+    system events and messages posted by this same bot.
     """
     logger.debug(f"🧭 Fetching last {k} messages for channel={channel_id}")
 
     try:
         resp = client.conversations_history(channel=channel_id, limit=k)
-
         messages = resp.get("messages") or []
         logger.debug(f"📬 Slack returned {len(messages)} messages")
 
-        # Filter out bot/system messages if needed
-        filtered = [
-            m for m in messages if m.get("type") == "message" and "subtype" not in m
-        ]
+        filtered = []
+        for m in messages:
+            subtype = m.get("subtype")
+            user = m.get("user")
+            bot_id = m.get("bot_id")
+            text_preview = m.get("text", "")[:80]
 
-        logger.debug(f"✅ Kept {len(filtered)} user messages (after filtering)")
+            # Filter out only system events
+            if subtype in {"channel_join", "channel_leave", "channel_topic"}:
+                logger.debug(f"⏩ Skipping system event (subtype={subtype})")
+                continue
+
+            # Filter out messages sent by this bot itself
+            if bot_user_id and (user == bot_user_id or bot_id == bot_user_id):
+                logger.debug(
+                    f"🤖 Skipping self message (user={user}, bot_id={bot_id}) → '{text_preview}'"
+                )
+                continue
+
+            filtered.append(m)
+
+        logger.debug(
+            f"✅ Kept {len(filtered)} messages after filtering system+bot events"
+        )
         if filtered:
             logger.debug(
                 f"🧾 Newest message ts={filtered[0]['ts']}, oldest={filtered[-1]['ts']}"
             )
+            logger.debug(f"🗣️ Example message text: {filtered[0].get('text')[:100]}...")
 
         return filtered
 
