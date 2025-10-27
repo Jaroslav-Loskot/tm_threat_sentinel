@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Set
 from loguru import logger
+import json
 
 from src.services.slack_manager import (
     client,
@@ -356,31 +357,28 @@ class ChannelMonitorPipeline(BasePipeline):
             return set()
 
     def _save_seen_urls(self, urls: Set[str]):
-        """Safely save seen URLs to persistent JSON with full logging."""
+        """Safely save seen URLs to persistent JSON (consistent with loader)."""
         try:
-            # ensure data directory exists
-            data_dir = Path("/app/data")
-            data_dir.mkdir(parents=True, exist_ok=True)
+            from src.utils.path_utils import get_data_path
+            import json, os
+            from datetime import datetime
 
-            # prepare path + data
-            path = data_dir / "seen_urls.json"
+            path = get_data_path("seen_urls.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
             now = datetime.utcnow().isoformat()
             data = [{"url": u, "timestamp": now} for u in urls]
 
-            logger.debug(f"💾 Attempting to save {len(urls)} URLs to {path}")
-
-            # write safely
+            logger.debug(f"💾 Attempting to save {len(urls)} URLs to {path.resolve()}")
             tmp_path = f"{path}.tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
-                import json
                 json.dump(data, f, indent=2)
             os.replace(tmp_path, path)
-
-            logger.debug(f"✅ Successfully wrote {len(urls)} URLs to {path}")
+            logger.debug(f"✅ Successfully wrote {len(urls)} URLs to {path.resolve()}")
         except Exception as e:
             logger.error(f"❌ Failed to save seen_urls.json: {e}")
 
     def _get_bot_user_id(self) -> str:
+        """Return the Slack bot’s own user ID via auth.test."""
         try:
             return client.auth_test().get("user_id", "")
         except Exception as e:
