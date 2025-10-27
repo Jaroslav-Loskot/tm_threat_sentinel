@@ -311,7 +311,12 @@ class ChannelMonitorPipeline(BasePipeline):
         save_json(logs, log_path)
 
     def _mark_seen(self, url: str):
-        self.seen_urls.add(url)
+        """Mark a URL as processed and persist it immediately."""
+        if url not in self.seen_urls:
+            self.seen_urls.add(url)
+            logger.debug(f"🧮 Added new seen URL: {url}")
+        else:
+            logger.debug(f"🔁 URL already seen: {url}")
         self._save_seen_urls(self.seen_urls)
 
     def _load_seen_urls(self) -> Set[str]:
@@ -340,9 +345,29 @@ class ChannelMonitorPipeline(BasePipeline):
             return set()
 
     def _save_seen_urls(self, urls: Set[str]):
-        now = datetime.utcnow().isoformat()
-        data = [{"url": u, "timestamp": now} for u in urls]
-        save_json(data, get_data_path("seen_urls.json"))
+        """Safely save seen URLs to persistent JSON with full logging."""
+        try:
+            # ensure data directory exists
+            data_dir = Path("/app/data")
+            data_dir.mkdir(parents=True, exist_ok=True)
+
+            # prepare path + data
+            path = data_dir / "seen_urls.json"
+            now = datetime.utcnow().isoformat()
+            data = [{"url": u, "timestamp": now} for u in urls]
+
+            logger.debug(f"💾 Attempting to save {len(urls)} URLs to {path}")
+
+            # write safely
+            tmp_path = f"{path}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                import json
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, path)
+
+            logger.debug(f"✅ Successfully wrote {len(urls)} URLs to {path}")
+        except Exception as e:
+            logger.error(f"❌ Failed to save seen_urls.json: {e}")
 
     def _get_bot_user_id(self) -> str:
         try:
