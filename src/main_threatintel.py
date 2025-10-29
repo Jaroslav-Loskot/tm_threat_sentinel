@@ -1,11 +1,12 @@
+from dotenv import load_dotenv
+import os
+load_dotenv(override=True)
+
 import asyncio
 from loguru import logger
-from dotenv import load_dotenv
 from src.pipelines.channel_monitor import ChannelMonitorPipeline
 from src.services.slack_manager import get_channel_id_by_name
-import os
 
-load_dotenv()
 
 CHANNEL_NAME = os.getenv("SLACK_CHANNEL_NAME", "")
 ALERT_EMAILS = (
