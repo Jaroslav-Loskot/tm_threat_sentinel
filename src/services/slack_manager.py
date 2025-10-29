@@ -45,52 +45,68 @@ def parse_duration_to_timedelta(value: str) -> timedelta:
     return timedelta(days=num)
 
 
+# src/services/slack_manager.py
+
+
 def fetch_channel_messages_last_k(
-    channel_id: str, bot_user_id: str | None = None, k: int = 10
+    channel_id: str, bot_user_id: str | None = None, k: int = 100
 ) -> list[dict]:
     """
-    Fetch the last K most recent messages from a Slack channel.
-    Includes bot messages (useful for news feeds) but safely skips
-    system events and messages posted by this same bot.
+    Fetch up to K most recent messages from a Slack channel, with pagination.
+    Returns messages sorted newest → oldest.
     """
-    logger.debug(f"🧭 Fetching last {k} messages for channel={channel_id}")
+    logger.debug(f"🧭 Fetching up to {k} messages for channel={channel_id}")
+
+    all_messages: list[dict] = []
+    cursor: str | None = None
+    total_fetched = 0
+    batch_size = 200  # Slack max per call = 200
 
     try:
-        resp = client.conversations_history(channel=channel_id, limit=k)
-        messages = resp.get("messages") or []
-        logger.debug(f"📬 Slack returned {len(messages)} messages")
+        while True:
+            remaining = k - total_fetched if k else batch_size
+            limit = min(batch_size, remaining)
 
-        filtered = []
-        for m in messages:
-            subtype = m.get("subtype")
-            user = m.get("user")
-            bot_id = m.get("bot_id")
-            text_preview = m.get("text", "")[:80]
-
-            # Filter out only system events
-            if subtype in {"channel_join", "channel_leave", "channel_topic"}:
-                logger.debug(f"⏩ Skipping system event (subtype={subtype})")
-                continue
-
-            # Filter out messages sent by this bot itself
-            if bot_user_id and (user == bot_user_id or bot_id == bot_user_id):
-                logger.debug(
-                    f"🤖 Skipping self message (user={user}, bot_id={bot_id}) → '{text_preview}'"
-                )
-                continue
-
-            filtered.append(m)
-
-        logger.debug(
-            f"✅ Kept {len(filtered)} messages after filtering system+bot events"
-        )
-        if filtered:
-            logger.debug(
-                f"🧾 Newest message ts={filtered[0]['ts']}, oldest={filtered[-1]['ts']}"
+            resp = client.conversations_history(
+                channel=channel_id,
+                limit=limit,
+                cursor=cursor or "",
             )
-            logger.debug(f"🗣️ Example message text: {filtered[0].get('text')[:100]}...")
+            messages = resp.get("messages") or []
+            if not messages:
+                break
 
-        return filtered
+            logger.debug(
+                f"📬 Got batch of {len(messages)} messages (total so far {total_fetched + len(messages)})"
+            )
+
+            # Filter out system / bot messages
+            for m in messages:
+                subtype = m.get("subtype")
+                user = m.get("user")
+                bot_id = m.get("bot_id")
+                if subtype in {"channel_join", "channel_leave", "channel_topic"}:
+                    continue
+                if bot_user_id and (user == bot_user_id or bot_id == bot_user_id):
+                    continue
+                all_messages.append(m)
+
+            total_fetched = len(all_messages)
+
+            # Stop when we have enough
+            if k and total_fetched >= k:
+                break
+
+            # Cursor for next page
+            cursor = (resp.get("response_metadata") or {}).get("next_cursor")
+            if not cursor:
+                break
+
+            time.sleep(0.6)  # avoid rate limits
+
+        # Slack returns newest first — keep that order
+        logger.debug(f"✅ Total fetched = {len(all_messages)} messages (newest→oldest)")
+        return all_messages
 
     except SlackApiError as e:
         logger.error(f"⚠️ Slack API error: {e.response['error']}")

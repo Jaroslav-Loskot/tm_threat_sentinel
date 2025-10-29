@@ -90,8 +90,10 @@ class ChannelMonitorPipeline(BasePipeline):
         logger.info(f" Pulling for last {self.max_k_messages} messages...")
 
         while True:
-            messages = messages = fetch_channel_messages_last_k(
-                self.channel_id, k=self.max_k_messages
+            messages = fetch_channel_messages_last_k(
+                self.channel_id,
+                bot_user_id=self.bot_user_id,
+                k=self.max_k_messages,
             )
             logger.info(f"💬 Scanned {len(messages)} messages")
 
@@ -136,8 +138,11 @@ class ChannelMonitorPipeline(BasePipeline):
                 if url:
                     urls_found.append(url.strip("<>"))
 
+            new_urls.sort(key=lambda x: float(x[0]), reverse=True)
+            
             if urls_found:
                 logger.debug(f"🧩 Found URLs in ts={ts}: {urls_found}")
+
 
             for url in urls_found:
                 if url not in self.seen_urls:
