@@ -38,7 +38,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MAX_MESSAGE_AGE = os.getenv("MAX_MESSAGE_AGE", "7d")
-MAX_K_MESSAGES = int(os.getenv("MAX_K_MESSAGES", "10"))
 
 class ChannelMonitorPipeline(BasePipeline):
     name = "Slack Channel Monitor"
@@ -55,7 +54,7 @@ class ChannelMonitorPipeline(BasePipeline):
     def __init__(
         self,
         channel_id: str,
-        max_k_messages: int = 10,
+        max_k_messages: int,
         poll_interval: int = 60,
         alert_emails: List[str] | None = None,
     ):
@@ -88,6 +87,7 @@ class ChannelMonitorPipeline(BasePipeline):
     async def execute(self):
         logger.info(f"👀 Monitoring Slack channel {self.channel_id}...")
         logger.info(f"🤖 Bot user ID: {self.bot_user_id}")
+        logger.info(f" Pulling for last {self.max_k_messages} messages...")
 
         while True:
             messages = messages = fetch_channel_messages_last_k(
