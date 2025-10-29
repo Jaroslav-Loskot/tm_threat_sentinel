@@ -55,13 +55,13 @@ class ChannelMonitorPipeline(BasePipeline):
     def __init__(
         self,
         channel_id: str,
-        model_name: str = "claude",
+        max_k_messages: int = 10,
         poll_interval: int = 60,
         alert_emails: List[str] | None = None,
     ):
         super().__init__(
             channel_id=channel_id,
-            model_name=model_name,
+            max_k_messages=max_k_messages,
             poll_interval=poll_interval,
             alert_emails=alert_emails,
         )
@@ -76,7 +76,7 @@ class ChannelMonitorPipeline(BasePipeline):
                 logger.error(f"❌ Failed to resolve channel '{channel_id}': {e}")
 
         self.channel_id = channel_id
-        self.model_name = model_name
+        self.max_k_messages = max_k_messages
         self.poll_interval = poll_interval
         self.alert_emails = alert_emails or []
         self.seen_urls = self._load_seen_urls()
@@ -91,7 +91,7 @@ class ChannelMonitorPipeline(BasePipeline):
 
         while True:
             messages = messages = fetch_channel_messages_last_k(
-                self.channel_id, k=MAX_K_MESSAGES
+                self.channel_id, k=self.max_k_messages
             )
             logger.info(f"💬 Scanned {len(messages)} messages")
 
@@ -169,7 +169,7 @@ class ChannelMonitorPipeline(BasePipeline):
             logger.success(f"✅ Crawled successfully ({len(content)} chars)")
 
             # --- Analyze ---
-            logger.info(f"🧠 Analyzing with {self.model_name}...")
+            logger.info(f"🧠 Analyzing ...")
             result = analyze_article(url, content)
             analysis_text = result.get("analysis", "")
             if not analysis_text:
@@ -230,7 +230,7 @@ class ChannelMonitorPipeline(BasePipeline):
     # ============================================================
     async def _analyze_content(self, url: str, content: str) -> str | None:
         try:
-            logger.info(f"🧠 Analyzing with {self.model_name}...")
+            logger.info(f"🧠 Analyzing ...")
             result = analyze_article(url, content)
             analysis_text = result.get("analysis", "")
             if not analysis_text:

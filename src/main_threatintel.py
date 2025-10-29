@@ -9,14 +9,14 @@ from src.services.slack_manager import get_channel_id_by_name
 
 
 CHANNEL_NAME = os.getenv("SLACK_CHANNEL_NAME", "")
+MAX_K_MESSAGES = int(os.getenv("max_k_messages", "10"))
 ALERT_EMAILS = (
     os.getenv("ALERT_EMAILS", "").split(",") if os.getenv("ALERT_EMAILS") else []
 )
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))
-MAX_MESSAGE_AGE = os.getenv("MAX_MESSAGE_AGE", "7d")
 
 logger.debug(
-    f"🔧 Env config — CHANNEL_NAME={CHANNEL_NAME}, ALERT_EMAILS={ALERT_EMAILS}, POLL_INTERVAL={POLL_INTERVAL}, MAX_MESSAGE_AGE={MAX_MESSAGE_AGE}"
+    f"🔧 Env config — CHANNEL_NAME={CHANNEL_NAME}, ALERT_EMAILS={ALERT_EMAILS}, POLL_INTERVAL={POLL_INTERVAL}"
 )
 
 
@@ -32,6 +32,7 @@ async def main():
 
     monitor = ChannelMonitorPipeline(
         channel_id=channel_id,
+        max_k_messages=MAX_K_MESSAGES,
         poll_interval=POLL_INTERVAL,
         alert_emails=ALERT_EMAILS,
     )
